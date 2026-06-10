@@ -1,6 +1,7 @@
 import asyncio
 import sys
 
+
 from copilot import CopilotClient
 from copilot.generated.session_events import SessionEventType
 from copilot.session import PermissionHandler
@@ -14,19 +15,35 @@ from sdlc_demo.tools import (
     validate_spec,
 )
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+def safe_write(text: str):
+    if text is None:
+        return
+
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except UnicodeEncodeError:
+        safe_text = text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+        print(safe_text, end="", flush=True)
+
 
 def print_streaming_event(event):
     event_type = str(event.type)
 
     if event.type == SessionEventType.ASSISTANT_MESSAGE_DELTA:
-        sys.stdout.write(event.data.delta_content)
-        sys.stdout.flush()
+        safe_write(event.data.delta_content)
 
     if "subagent" in event_type.lower():
-        print(f"\n[Evento subagente] {event_type}")
+        safe_write(f"\n[Evento subagente] {event_type}\n")
 
     if event.type == SessionEventType.SESSION_IDLE:
-        print("\n[Sesión finalizada]")
+        safe_write("\n[Sesion finalizada]\n")
 
 
 async def run_demo(user_idea: str):
@@ -64,6 +81,7 @@ Alcance estricto:
 - No ejecutes comandos.
 - No busques contexto adicional.
 - No inventes normativa concreta.
+- No uses emojis ni iconos Unicode.
 
 Tu misión:
 - Revisar riesgos de seguridad, auditoría, trazabilidad, autenticación y autorización.
@@ -92,6 +110,7 @@ Alcance estricto:
 - No busques contexto externo.
 - No inventes sistemas internos concretos.
 - No des por aprobada la arquitectura; genera una propuesta inicial.
+- No uses emojis ni iconos Unicode.
 
 Tu misión:
 - Proponer una arquitectura técnica inicial.
@@ -121,6 +140,7 @@ Alcance estricto:
 - No busques contexto externo.
 - No inventes decisiones aprobadas.
 - No escribas el documento completo en la respuesta conversacional.
+- No uses emojis ni iconos Unicode.
 
 Tu misión:
 - Generar documentación técnica inicial en formato resumido.
@@ -155,47 +175,60 @@ Instrucciones estrictas:
 - No ejecutes comandos.
 - No busques contexto externo.
 - Trabaja únicamente con la idea de negocio proporcionada.
-- No reproduzcas documentos completos en la respuesta final; si una tool genera un documento, muestra solo la ruta y un resumen.
+- No uses emojis.
+- No uses iconos Unicode.
+- No uses símbolos decorativos.
+- No reproduzcas documentos completos en la respuesta final.
 - Termina la respuesta final después de guardar la traza.
 
 Rol:
-Actúa como ORQUESTADOR SDLC inteligente.
+Actúa como ORQUESTADOR SDLC.
 
 Subagentes disponibles:
 1. security_reviewer
    - Especialista en seguridad, autenticación, autorización, trazabilidad, auditoría y riesgos regulatorios.
+   - Úsalo si la iniciativa afecta a clientes, operaciones bancarias, datos sensibles, permisos, identidad, pagos, transferencias, auditoría o cumplimiento.
 
 2. architecture_designer
    - Especialista en arquitectura técnica, infraestructura lógica, componentes, integraciones y riesgos técnicos.
+   - Úsalo si la iniciativa requiere APIs, backend, integración con sistemas, canales digitales, core bancario, eventos, servicios, persistencia u observabilidad.
 
 3. technical_writer
    - Especialista en documentación técnica.
-   - Úsalo solo al final si hay suficiente información validada para generar un borrador técnico.
+   - Úsalo si el usuario pide explícitamente documentación técnica, borrador técnico o artefacto técnico.
 
-Criterios de orquestación:
-1. Primero convierte la idea en una especificación SDLC estructurada.
-2. Después usa validate_spec.
-3. Decide dinámicamente qué subagentes son necesarios según la especificación y la validación.
-4. Puedes invocar uno, varios o ningún subagente.
-5. No invoques technical_writer hasta haber terminado las revisiones necesarias.
-6. No invoques subagentes innecesarios.
-7. Si la especificación es demasiado ambigua, no fuerces arquitectura ni documentación completa; genera dudas abiertas.
-8. Usa save_trace al final.
+Regla de orquestación principal:
+- Por defecto, invoca como máximo UN subagente.
+- Elige el subagente más relevante según la idea de negocio.
+- No invoques subagentes innecesarios.
+- Si hay duda entre seguridad y arquitectura, prioriza security_reviewer cuando haya clientes, pagos, transferencias, autenticación, autorización o auditoría.
+- Solo puedes invocar varios subagentes si la idea contiene explícitamente la frase: "ejecutar sala completa".
+- Si la idea contiene "ejecutar sala completa", puedes invocar security_reviewer, architecture_designer y technical_writer, si aplica.
+
+Proceso:
+1. Convierte la idea en una especificación SDLC estructurada.
+2. Usa validate_spec para revisar si la especificación está completa.
+3. Decide qué subagente invocar según la regla de orquestación principal.
+4. Invoca como máximo un subagente, salvo que la idea pida "ejecutar sala completa".
+5. Si invocas security_reviewer, debe usar security_precheck.
+6. Si invocas architecture_designer, debe usar architecture_precheck.
+7. Si invocas technical_writer, debe usar generate_technical_doc.
+8. Usa save_trace para guardar la traza.
 9. Devuelve la respuesta final en español.
 
 La respuesta final debe incluir:
 - Especificación estructurada resumida
 - Resultado de validate_spec
+- Decisión de orquestación
 - Subagentes considerados
-- Subagentes invocados
+- Subagente o subagentes invocados
 - Motivo de cada invocación
-- Resultado resumido de cada subagente invocado
-- Ruta del documento técnico generado, sin reproducir el documento completo
+- Resultado resumido del subagente o subagentes invocados
 - Dudas abiertas
 - Trace ID
 """
 
-        await session.send_and_wait(prompt, timeout=300)
+        await session.send_and_wait(prompt, timeout=420)
 
     finally:
         await client.stop()

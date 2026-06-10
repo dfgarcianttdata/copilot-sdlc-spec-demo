@@ -1,2 +1,3 @@
 github-copilot-sdk
 pydantic
+streamlit
