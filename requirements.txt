@@ -1,3 +1,5 @@
 github-copilot-sdk
 pydantic
 streamlit
+openai
+python-dotenv

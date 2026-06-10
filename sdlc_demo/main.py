@@ -8,7 +8,7 @@ from copilot.session import PermissionHandler
 
 from sdlc_demo.prompts import DEMO_IDEA, SYSTEM_PROMPT
 from sdlc_demo.tools import (
-    architecture_precheck,
+    architecture_llm_design,
     generate_technical_doc,
     save_trace,
     security_precheck,
@@ -58,7 +58,7 @@ async def run_demo(user_idea: str):
                 validate_spec,
                 save_trace,
                 security_precheck,
-                architecture_precheck,
+                architecture_llm_design,
                 generate_technical_doc,
             ],
             custom_agents=[
@@ -95,31 +95,36 @@ Tu misión:
                     "display_name": "Architecture Designer",
                     "description": (
                         "Subagente especializado en proponer una arquitectura técnica inicial "
-                        "para iniciativas SDLC, incluyendo componentes, integraciones, riesgos "
-                        "arquitectónicos e infraestructura lógica."
+                        "para iniciativas SDLC. Este subagente usa un LLM externo configurado "
+                        "mediante la tool architecture_llm_design."
                     ),
-                    "tools": ["architecture_precheck"],
+                    "tools": ["architecture_llm_design"],
                     "prompt": """
-Eres un subagente arquitecto técnico para un SDLC bancario regulado.
+                    Eres un subagente arquitecto técnico para un SDLC bancario regulado.
 
-Alcance estricto:
-- Usa únicamente la especificación recibida.
-- No explores repositorios.
-- No inspecciones archivos.
-- No ejecutes comandos.
-- No busques contexto externo.
-- No inventes sistemas internos concretos.
-- No des por aprobada la arquitectura; genera una propuesta inicial.
-- No uses emojis ni iconos Unicode.
+                    Alcance estricto:
+                    - Usa únicamente la especificación recibida.
+                    - No explores repositorios.
+                    - No inspecciones archivos.
+                    - No ejecutes comandos.
+                    - No busques contexto externo.
+                    - No inventes sistemas internos concretos.
+                    - No des por aprobada la arquitectura; genera una propuesta inicial.
+                    - No uses emojis ni iconos Unicode.
 
-Tu misión:
-- Proponer una arquitectura técnica inicial.
-- Identificar componentes lógicos.
-- Identificar integraciones necesarias.
-- Detectar riesgos arquitectónicos.
-- Usar la tool architecture_precheck cuando tengas información suficiente.
-- Responder siempre en español.
-""",
+                    Tu misión:
+                    - Proponer una arquitectura técnica inicial.
+                    - Identificar componentes lógicos.
+                    - Identificar integraciones necesarias.
+                    - Detectar riesgos arquitectónicos.
+                    - Usar obligatoriamente la tool architecture_llm_design cuando tengas información suficiente.
+                    - Indicar que la propuesta de arquitectura se ha generado con el LLM externo de arquitectura configurado.
+                    - Al devolver tu resultado, indica explícitamente:
+                    "Modelo/proveedor utilizado: LLM externo OpenAI-compatible configurado en .env"
+                    - Indica también:
+                    "Tool utilizada: architecture_llm_design"
+                    - Responder siempre en español.
+                    """,
                 },
                 {
                     "name": "technical_writer",
@@ -211,21 +216,54 @@ Proceso:
 3. Decide qué subagente invocar según la regla de orquestación principal.
 4. Invoca como máximo un subagente, salvo que la idea pida "ejecutar sala completa".
 5. Si invocas security_reviewer, debe usar security_precheck.
-6. Si invocas architecture_designer, debe usar architecture_precheck.
+6. Si invocas architecture_designer, debe usar architecture_llm_design.
 7. Si invocas technical_writer, debe usar generate_technical_doc.
 8. Usa save_trace para guardar la traza.
 9. Devuelve la respuesta final en español.
 
-La respuesta final debe incluir:
-- Especificación estructurada resumida
-- Resultado de validate_spec
-- Decisión de orquestación
-- Subagentes considerados
-- Subagente o subagentes invocados
-- Motivo de cada invocación
-- Resultado resumido del subagente o subagentes invocados
-- Dudas abiertas
-- Trace ID
+La respuesta final debe incluir obligatoriamente estas secciones:
+
+1. Especificación estructurada resumida
+
+2. Resultado de validate_spec
+
+3. Decisión de orquestación
+   Incluye:
+   - Subagentes disponibles
+   - Subagentes evaluados
+   - Subagentes candidatos
+   - Subagentes invocados
+   - Subagentes no invocados y motivo
+
+   Usa estas definiciones:
+   - Disponible: el subagente existe en la sesión.
+   - Evaluado: el orquestador lo ha analizado como posible opción.
+   - Candidato: el subagente sería útil para la iniciativa.
+   - Invocado: el subagente se ha ejecutado realmente.
+   - No invocado: el subagente no se ha ejecutado, aunque pueda haber sido evaluado o candidato.
+
+   No uses "aplicable" como sinónimo de "invocado".
+   Si un subagente es candidato pero no se invoca, explica claramente el motivo.
+
+4. Modelo utilizado por agente/subagente
+   Para cada agente o subagente indica:
+   - nombre del agente
+   - si ha sido invocado o no
+   - modelo/proveedor utilizado
+   - tool principal utilizada
+
+   Usa esta convención:
+   - Agente principal SDLC: Copilot SDK modelo por defecto
+   - security_reviewer: Copilot SDK modelo por defecto si ha sido invocado
+   - architecture_designer: LLM externo OpenAI-compatible configurado en .env mediante architecture_llm_design si ha sido invocado
+   - technical_writer: Copilot SDK modelo por defecto si ha sido invocado
+
+5. Resultado resumido de cada subagente invocado
+
+6. Dudas abiertas
+
+7. Trace ID
+
 """
 
         await session.send_and_wait(prompt, timeout=420)

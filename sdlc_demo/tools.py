@@ -1,12 +1,17 @@
+import asyncio
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
 from copilot.tools import define_tool
+from dotenv import load_dotenv
+from openai import OpenAI
 from pydantic import BaseModel, Field
 
+load_dotenv()
 
 TRACE_FILE = Path("data/traces.jsonl")
 
@@ -52,6 +57,9 @@ async def validate_spec(params: ValidateSpecParams) -> dict:
         issues.append("Algunos criterios de aceptación son demasiado vagos.")
 
     return {
+        "agent": "main_sdlc_orchestrator",
+        "provider": "copilot_sdk_default_model",
+        "tool_used": "validate_spec",
         "is_complete": len(issues) == 0,
         "issues": issues,
         "recommendation": (
@@ -88,6 +96,9 @@ async def save_trace(params: SaveTraceParams) -> dict:
         file.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     return {
+        "agent": "main_sdlc_orchestrator",
+        "provider": "copilot_sdk_default_model",
+        "tool_used": "save_trace",
         "trace_id": trace_id,
         "status": "stored",
         "file": str(TRACE_FILE),
@@ -137,14 +148,17 @@ async def security_precheck(params: SecurityPrecheckParams) -> dict:
         )
 
     return {
-        "security_status": "ok" if len(findings) == 0 else "needs_review",
-        "findings": findings,
-        "recommendation": (
-            "La especificación supera la prevalidación básica de seguridad."
-            if len(findings) == 0
-            else "La especificación debe revisarse/refinarse desde seguridad antes de avanzar."
-        ),
-    }
+    "agent": "security_reviewer",
+    "provider": "copilot_sdk_default_model",
+    "tool_used": "security_precheck",
+    "security_status": "ok" if len(findings) == 0 else "needs_review",
+    "findings": findings,
+    "recommendation": (
+        "La especificación supera la prevalidación básica de seguridad."
+        if len(findings) == 0
+        else "La especificación debe revisarse/refinarse desde seguridad antes de avanzar."
+    ),
+}
 
 class ArchitecturePrecheckParams(BaseModel):
     feature_summary: str = Field(description="Resumen funcional de la iniciativa")
@@ -265,6 +279,9 @@ async def generate_technical_doc(params: TechnicalDocParams) -> dict:
     file_path.write_text(content, encoding="utf-8")
 
     return {
+        "agent": "technical_writer",
+        "provider": "copilot_sdk_default_model",
+        "tool_used": "generate_technical_doc",
         "document_type": "Documento técnico inicial",
         "title": params.title,
         "file_path": str(file_path),
@@ -279,3 +296,116 @@ async def generate_technical_doc(params: TechnicalDocParams) -> dict:
         "format": "markdown",
         "status": "saved",
     }
+
+def call_architecture_llm(prompt: str) -> str:
+    api_key = os.getenv("ARCH_LLM_API_KEY")
+    base_url = os.getenv("ARCH_LLM_BASE_URL")
+    deployment = os.getenv("ARCH_LLM_DEPLOYMENT")
+
+    missing = []
+
+    if not api_key:
+        missing.append("ARCH_LLM_API_KEY")
+
+    if not base_url:
+        missing.append("ARCH_LLM_BASE_URL")
+
+    if not deployment:
+        missing.append("ARCH_LLM_DEPLOYMENT")
+
+    if missing:
+        return (
+            "No se ha podido invocar el LLM de arquitectura porque faltan variables "
+            "en el fichero .env: " + ", ".join(missing)
+        )
+
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+    )
+
+    response = client.responses.create(
+        model=deployment,
+        input=prompt,
+    )
+
+    return response.output_text
+
+class ArchitectureLlmDesignParams(BaseModel):
+    feature_summary: str = Field(description="Resumen funcional de la iniciativa")
+    functional_scope: str = Field(description="Alcance funcional de la iniciativa")
+    constraints: str = Field(description="Restricciones funcionales, técnicas, regulatorias o de seguridad")
+    acceptance_criteria: List[str] = Field(description="Criterios de aceptación")
+    security_summary: str = Field(description="Resumen de la revisión de seguridad, si existe")
+
+
+@define_tool(description="Genera una propuesta de arquitectura usando un LLM externo configurado para arquitectura")
+async def architecture_llm_design(params: ArchitectureLlmDesignParams) -> dict:
+    architecture_prompt = f"""
+Eres un arquitecto técnico senior en un entorno bancario regulado.
+
+Genera una propuesta de arquitectura técnica inicial para la siguiente iniciativa SDLC.
+
+Resumen funcional:
+{params.feature_summary}
+
+Alcance funcional:
+{params.functional_scope}
+
+Restricciones:
+{params.constraints}
+
+Criterios de aceptación:
+{chr(10).join("- " + criterion for criterion in params.acceptance_criteria)}
+
+Resumen de seguridad:
+{params.security_summary}
+
+Necesito una propuesta resumida con estas secciones:
+1. Estilo arquitectónico recomendado
+2. Componentes lógicos
+3. Integraciones necesarias
+4. Datos y trazabilidad
+5. Observabilidad
+6. Riesgos técnicos
+7. Decisiones pendientes
+8. Revisión humana requerida
+
+Reglas:
+- Responde en español.
+- No uses emojis.
+- No uses iconos Unicode.
+- No inventes nombres internos de sistemas.
+- Marca supuestos cuando falte información.
+- No digas que la arquitectura está aprobada.
+"""
+
+    try:
+        architecture_output = await asyncio.to_thread(
+            call_architecture_llm,
+            architecture_prompt,
+        )
+
+        return {
+            "agent": "architecture_designer",
+            "provider": "external_openai_compatible_llm",
+            "deployment": os.getenv("ARCH_LLM_DEPLOYMENT", "not_configured"),
+            "model_source": "configured_in_env",
+            "tool_used": "architecture_llm_design",
+            "status": "ok",
+            "architecture_proposal": architecture_output,
+            "human_review_required": True,
+        }
+
+    except Exception as exc:
+        return {
+            "agent": "architecture_designer",
+            "provider": "external_openai_compatible_llm",
+            "deployment": os.getenv("ARCH_LLM_DEPLOYMENT", "not_configured"),
+            "model_source": "configured_in_env",
+            "tool_used": "architecture_llm_design",
+            "status": "error",
+            "error": str(exc),
+            "architecture_proposal": "No se pudo generar la arquitectura con el LLM externo.",
+            "human_review_required": True,
+        }
