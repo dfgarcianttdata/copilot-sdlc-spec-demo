@@ -1,6 +1,8 @@
 import asyncio
 import json
 import os
+import sys
+import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,11 +13,103 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
 load_dotenv()
 
 TRACE_FILE = Path("data/traces.jsonl")
+WIKIPEDIA_MCP_DEBUG_FILE = Path("data/wikipedia_mcp_debug.log")
 
 
+def write_wikipedia_debug(message: str) -> None:
+    WIKIPEDIA_MCP_DEBUG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    with WIKIPEDIA_MCP_DEBUG_FILE.open("a", encoding="utf-8") as file:
+        file.write(message)
+        file.write("\n")
+
+class WikipediaMcpContextParams(BaseModel):
+    concepts: List[str] = Field(
+        description="Lista de conceptos públicos a consultar en Wikipedia mediante MCP"
+    )
+class WikipediaMcpContextParams(BaseModel):
+    concepts: List[str] = Field(
+        description="Lista de conceptos públicos a consultar en Wikipedia mediante MCP"
+    )
+
+
+@define_tool(
+    description=(
+        "Diagnostica y recupera contexto público desde Wikipedia usando un MCP server real "
+        "por stdio. No usa web_fetch ni llamadas HTTP directas desde el agente."
+    )
+)
+async def wikipedia_mcp_context(params: WikipediaMcpContextParams) -> dict:
+    try:
+        write_wikipedia_debug("INICIO wikipedia_mcp_context")
+        write_wikipedia_debug(f"Conceptos recibidos: {params.concepts}")
+
+        command = str(Path(sys.executable).parent / "wikipedia-mcp.exe")
+        write_wikipedia_debug(f"Comando MCP: {command}")
+
+        server_params = StdioServerParameters(
+            command=command,
+            args=[
+                "--transport",
+                "stdio",
+                "--language",
+                "es",
+            ],
+        )
+
+        write_wikipedia_debug("ANTES de stdio_client")
+
+        async with stdio_client(server_params) as (read, write):
+            write_wikipedia_debug("DESPUES de stdio_client")
+
+            async with ClientSession(read, write) as mcp_session:
+                write_wikipedia_debug("DESPUES de ClientSession")
+
+                write_wikipedia_debug("ANTES de initialize")
+                await mcp_session.initialize()
+                write_wikipedia_debug("DESPUES de initialize")
+
+                write_wikipedia_debug("ANTES de list_tools")
+                tools_response = await mcp_session.list_tools()
+                available_tools = [tool.name for tool in tools_response.tools]
+                write_wikipedia_debug(f"TOOLS DISPONIBLES: {available_tools}")
+
+                return {
+                    "status": "ok",
+                    "source": "Wikipedia",
+                    "method": "MCP via stdio",
+                    "mcp_server": "wikipedia_context",
+                    "tool_used_by_subagent": "wikipedia_mcp_context",
+                    "available_tools": available_tools,
+                    "concepts_requested": params.concepts[:3],
+                }
+
+    except BaseException as exc:
+        error_detail = traceback.format_exc()
+
+        write_wikipedia_debug("ERROR EN wikipedia_mcp_context")
+        write_wikipedia_debug(f"Tipo error: {type(exc).__name__}")
+        write_wikipedia_debug(f"Error: {str(exc)}")
+        write_wikipedia_debug(error_detail)
+
+        return {
+            "status": "error",
+            "source": "Wikipedia",
+            "method": "MCP via stdio",
+            "mcp_server": "wikipedia_context",
+            "tool_used_by_subagent": "wikipedia_mcp_context",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "debug_file": str(WIKIPEDIA_MCP_DEBUG_FILE),
+            "concepts_requested": params.concepts[:3],
+        }
+    
 class ValidateSpecParams(BaseModel):
     problem: str = Field(description="Problema de negocio que se quiere resolver")
     users: str = Field(description="Usuarios afectados por el problema")

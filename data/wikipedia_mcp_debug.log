@@ -1,0 +1,10 @@
+INICIO wikipedia_mcp_context
+Conceptos recibidos: ['Autenticación multifactor', 'Auditoría informática', 'Trazabilidad']
+Comando MCP: C:\src\NTTDATA\BBVA\copilot-sdlc-spec-demo\.venv\Scripts\wikipedia-mcp.exe
+ANTES de stdio_client
+DESPUES de stdio_client
+DESPUES de ClientSession
+ANTES de initialize
+DESPUES de initialize
+ANTES de list_tools
+TOOLS DISPONIBLES: ['search_wikipedia', 'wikipedia_search_wikipedia', 'test_wikipedia_connectivity', 'wikipedia_test_wikipedia_connectivity', 'get_article', 'wikipedia_get_article', 'get_summary', 'wikipedia_get_summary', 'summarize_article_for_query', 'wikipedia_summarize_article_for_query', 'summarize_article_section', 'wikipedia_summarize_article_section', 'extract_key_facts', 'wikipedia_extract_key_facts', 'get_related_topics', 'wikipedia_get_related_topics', 'get_sections', 'wikipedia_get_sections', 'get_links', 'wikipedia_get_links', 'get_coordinates', 'wikipedia_get_coordinates']

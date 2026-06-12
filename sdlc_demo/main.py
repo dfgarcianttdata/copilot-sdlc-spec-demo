@@ -13,6 +13,13 @@ from sdlc_demo.tools import (
     save_trace,
     security_precheck,
     validate_spec,
+    wikipedia_mcp_context,
+)
+
+from sdlc_demo.session_store import (
+    build_continuation_context,
+    generate_session_id,
+    save_session_record,
 )
 
 try:
@@ -33,22 +40,31 @@ def safe_write(text: str):
         print(safe_text, end="", flush=True)
 
 
-def print_streaming_event(event):
-    event_type = str(event.type)
-
-    if event.type == SessionEventType.ASSISTANT_MESSAGE_DELTA:
-        safe_write(event.data.delta_content)
-
-    if "subagent" in event_type.lower():
-        safe_write(f"\n[Evento subagente] {event_type}\n")
-
-    if event.type == SessionEventType.SESSION_IDLE:
-        safe_write("\n[Sesion finalizada]\n")
 
 
-async def run_demo(user_idea: str):
+async def run_demo(user_idea: str, existing_session_id: str | None = None):
+    
+    
+    demo_session_id = existing_session_id or generate_session_id()
+    previous_context = ""
+
+    if existing_session_id:
+        previous_context = build_continuation_context(existing_session_id)
+
     client = CopilotClient()
     await client.start()
+
+    wikipedia_mcp_server = {
+        "wikipedia_context": {
+            "command": str(Path(sys.executable).parent / "wikipedia-mcp.exe"),
+            "args": [
+                "--transport",
+                "stdio",
+                "--language",
+                "es",
+            ],
+        }
+    }
 
     try:
         session = await client.create_session(
@@ -60,18 +76,9 @@ async def run_demo(user_idea: str):
                 security_precheck,
                 architecture_llm_design,
                 generate_technical_doc,
+                wikipedia_mcp_context,
             ],
-            mcp_servers={
-                "wikipedia_context": {
-                    "command": str(Path(sys.executable).parent / "wikipedia-mcp.exe"),
-                    "args": [
-                        "--transport",
-                        "stdio",
-                        "--language",
-                        "es",
-                    ],
-                }
-            },
+            mcp_servers= wikipedia_mcp_server,
             custom_agents=[
                 {
                     "name": "security_reviewer",
@@ -179,64 +186,98 @@ async def run_demo(user_idea: str):
                     "display_name": "Public Context Reviewer",
                     "description": (
                         "Subagente especializado en recuperar contexto público de referencia "
-                        "desde Wikipedia mediante MCP. No consulta información interna ni corporativa."
+                        "desde Wikipedia mediante una tool puente que invoca MCP por stdio."
                     ),
-                    "mcp_servers": {
-                    "wikipedia_context": {
-                        "command": str(Path(sys.executable).parent / "wikipedia-mcp.exe"),
-                        "args": [
-                            "--transport",
-                            "stdio",
-                            "--language",
-                            "es",
-                        ],
-                    }
-                },
+                    "tools": ["wikipedia_mcp_context"],
                     "prompt": """
                 Eres un subagente de contexto público para una demo SDLC.
 
                 Alcance estricto:
-                - Usa únicamente el MCP server wikipedia_context.
-                - Consulta solo conceptos públicos generales.
+                - Usa únicamente la tool wikipedia_mcp_context.
+                - La tool wikipedia_mcp_context invoca internamente un MCP server real de Wikipedia por stdio.
+                - No intentes usar directamente el MCP wikipedia_context.
+                - No busques tools MCP directamente.
+                - No uses web_fetch, búsqueda web, navegador, curl o HTTP fetch.
+                - No simules haber consultado Wikipedia.
+                - No sustituyas MCP Wikipedia por otra herramienta.
                 - No busques información interna de BBVA.
                 - No busques datos personales.
                 - No uses Wikipedia como fuente normativa o corporativa.
                 - No tomes Wikipedia como fuente de verdad para decisiones regulatorias.
-                - Máximo 2 consultas MCP.
                 - No uses emojis ni iconos Unicode.
                 - Responde siempre en español.
 
                 Tu misión:
                 - Recuperar contexto público de referencia sobre conceptos relevantes de la iniciativa.
-                - Priorizar conceptos como autenticación fuerte, auditoría, trazabilidad, API, arquitectura orientada a eventos, observabilidad, DevSecOps u OpenAPI.
-                - Devolver un resumen breve y útil para el orquestador.
-                - Indicar claramente la fuente: Wikipedia vía MCP.
-                - Indicar que el contexto recuperado es público y no sustituye políticas internas ni revisión humana.
+                - Usa wikipedia_mcp_context con estos conceptos:
+                1. Autenticación multifactor
+                2. Auditoría informática
+                3. Trazabilidad
+                - Devuelve un resumen breve y útil para el orquestador.
+                - Indica claramente:
+                - Fuente: Wikipedia
+                - Método: MCP vía tool puente wikipedia_mcp_context
+                - MCP server interno: wikipedia_context
+                - Tool local invocada por el subagente: wikipedia_mcp_context
+
+                Si wikipedia_mcp_context devuelve error, informa el error y no inventes contenido.
                 """,
                 },
             ],
         )
+
+        assistant_output_parts = []
+
+        def print_streaming_event(event):
+            event_type = str(event.type)
+
+            if event.type == SessionEventType.ASSISTANT_MESSAGE_DELTA:
+                delta = event.data.delta_content or ""
+                assistant_output_parts.append(delta)
+                safe_write(delta)
+
+            if "subagent" in event_type.lower():
+                safe_write(f"\n[Evento subagente] {event_type}\n")
+
+            if event.type == SessionEventType.SESSION_IDLE:
+                safe_write("\n[Sesion finalizada]\n")
 
         session.on(print_streaming_event)
 
         prompt = f"""
 {SYSTEM_PROMPT}
 
+Session ID de demo:
+{demo_session_id}
+
 Idea de negocio:
 {user_idea}
+
+Contexto persistido:
+{previous_context}
 
 Instrucciones estrictas:
 - No explores el repositorio.
 - No inspecciones ficheros.
 - No ejecutes comandos.
 - No uses contexto externo salvo que el usuario pida explícitamente usar contexto público, usar Wikipedia o usar MCP Wikipedia.
-- Si se permite contexto externo, solo puede obtenerse mediante el subagente public_context_reviewer y el MCP wikipedia_context.
+- Si se permite contexto externo, solo puede obtenerse mediante el subagente public_context_reviewer y la tool wikipedia_mcp_context.
+- La tool wikipedia_mcp_context invoca un MCP server real de Wikipedia por stdio.
+- No uses web_fetch, búsqueda web, curl, navegador ni herramientas HTTP alternativas.
+- No asumas nombres concretos de tools MCP.
+- No menciones prefijos de tools MCP en la respuesta final.
 - Trabaja principalmente con la idea de negocio proporcionada.
 - No uses emojis.
 - No uses iconos Unicode.
 - No uses símbolos decorativos.
 - No reproduzcas documentos completos en la respuesta final.
 - Termina la respuesta final después de guardar la traza.
+- Si hay contexto persistido, úsalo como referencia, pero no lo trates como verdad absoluta.
+- Si el usuario pide continuar, refinar o ampliar, conserva la trazabilidad con el Session ID anterior.
+- No uses herramientas alternativas como web_fetch, búsqueda web, navegador, HTTP fetch o herramientas no declaradas.
+- Si wikipedia_mcp_context devuelve error, informa el error y continúa sin simular contexto público.
+- No simules haber consultado Wikipedia.
+- No sustituyas MCP Wikipedia por otra herramienta.
 
 Rol:
 Actúa como ORQUESTADOR SDLC.
@@ -261,10 +302,10 @@ Subagentes disponibles:
 
 4. public_context_reviewer
    - Especialista en recuperar contexto público de referencia desde Wikipedia mediante MCP.
+   - Usa la tool wikipedia_mcp_context, que invoca un MCP server real de Wikipedia por stdio.
    - Úsalo si la iniciativa contiene "usar contexto público", "usar Wikipedia", "usar MCP Wikipedia" o si el usuario pide enriquecer la sesión con contexto externo público.
+   - No debe usar web_fetch, búsqueda web, curl ni herramientas HTTP alternativas.
    - No debe usarse para información interna, normativa corporativa, datos sensibles ni decisiones regulatorias.
-   - Si se invoca, debe usar únicamente el MCP wikipedia_context.
-   - El contexto recuperado es público y no sustituye políticas internas ni revisión humana.
 
 Regla de orquestación principal:
 - Distingue entre subagentes de contexto y subagentes de análisis.
@@ -272,7 +313,9 @@ Regla de orquestación principal:
 - security_reviewer, architecture_designer y technical_writer son subagentes de análisis.
 - Por defecto, puedes invocar como máximo UN subagente de análisis.
 - public_context_reviewer puede invocarse adicionalmente antes del subagente de análisis si el usuario pide usar contexto público, Wikipedia o MCP Wikipedia.
-- Si se invoca public_context_reviewer, primero recupera el contexto público y después decide si invocar un subagente de análisis.
+- Si se invoca public_context_reviewer, debe usar la tool wikipedia_mcp_context para intentar recuperar contexto público.
+- Si wikipedia_mcp_context devuelve error, informa el error y continúa el flujo SDLC sin simular contexto público.
+- Después decide si invocar un subagente de análisis.
 - Solo puedes invocar varios subagentes de análisis si la idea contiene explícitamente la frase: "ejecutar sala completa".
 - Si la idea contiene "ejecutar sala completa", puedes invocar security_reviewer, architecture_designer y technical_writer, si aplica.
 - Si la idea contiene "usar MCP Wikipedia" o "usar Wikipedia", puedes invocar public_context_reviewer además de los subagentes de análisis aplicables.
@@ -301,7 +344,9 @@ La respuesta final debe incluir obligatoriamente estas secciones:
    Incluye:
    - Si se ha usado contexto externo o no
    - Fuente utilizada
-   - MCP utilizado
+   - Método utilizado
+   - Tool invocada
+   - MCP interno utilizado por la tool, si aplica
    - Resumen del contexto recuperado
    - Limitaciones del contexto público
 
@@ -334,7 +379,7 @@ La respuesta final debe incluir obligatoriamente estas secciones:
 
    Usa esta convención:
    - Agente principal SDLC: Copilot SDK modelo por defecto
-   - public_context_reviewer: Copilot SDK modelo por defecto + MCP wikipedia_context si ha sido invocado
+   - public_context_reviewer: Copilot SDK modelo por defecto + tool wikipedia_mcp_context + MCP wikipedia_context por stdio si ha sido invocado
    - security_reviewer: Copilot SDK modelo por defecto + security_precheck si ha sido invocado
    - architecture_designer: LLM externo OpenAI-compatible configurado en .env mediante architecture_llm_design si ha sido invocado
    - technical_writer: Copilot SDK modelo por defecto + generate_technical_doc si ha sido invocado
@@ -347,15 +392,27 @@ La respuesta final debe incluir obligatoriamente estas secciones:
 """
 
         await session.send_and_wait(prompt, timeout=420)
+        assistant_response = "".join(assistant_output_parts)
 
+        save_session_record(
+            {
+                "session_id": demo_session_id,
+                "created_at": None,
+                "user_idea": user_idea,
+                "prompt": prompt,
+                "response": assistant_response,
+                "status": "completed",
+                "source": "copilot_sdlc_demo",
+            }
+        )
+
+        safe_write(f"\n[Session ID persistido] {demo_session_id}\n")
     finally:
         await client.stop()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        idea = " ".join(sys.argv[1:])
-    else:
-        idea = DEMO_IDEA
+    idea = sys.argv[1] if len(sys.argv) > 1 else DEMO_IDEA
+    existing_session_id = sys.argv[2] if len(sys.argv) > 2 else None
 
-    asyncio.run(run_demo(idea))
+    asyncio.run(run_demo(idea, existing_session_id))
